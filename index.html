@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Luyện nói tiếng Anh giao tiếp cùng nhân vật ảo Emma: chọn chủ đề, trò chuyện bằng mic hoặc gõ chữ, được sửa lỗi bằng tiếng Việt." />
+    <title>Luyện nói tiếng Anh giao tiếp cùng Emma</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-dot" aria-hidden="true"></span>
+          <strong>Emma</strong><span class="brand-sub"> · Luyện nói tiếng Anh giao tiếp</span>
+        </div>
+        <div class="top-stats" aria-live="polite">
+          <span title="Sao tích lũy">⭐ <b id="statStars">0</b></span>
+          <span title="Điểm tích lũy">🏅 <b id="statScore">0</b> điểm</span>
+        </div>
+      </header>
+
+      <!-- Voice status: always visible, never silently pretends a voice is ready -->
+      <div class="voicebar" role="status" aria-live="polite">
+        <span id="voiceStatus">Đang chuẩn bị giọng đọc…</span>
+        <label class="voice-pick">
+          Giọng đọc:
+          <select id="voiceEngine" aria-label="Chọn giọng đọc">
+            <option value="piper" selected>Piper (miễn phí, chạy trên máy bạn)</option>
+            <option value="kokoro">Kokoro chất lượng cao (máy tính có WebGPU)</option>
+            <option value="system">Giọng hệ thống (dự phòng)</option>
+          </select>
+        </label>
+      </div>
+      <div id="voiceProgress" class="voice-progress" hidden>
+        <div class="voice-progress-bar"><span id="voiceProgressFill"></span></div>
+        <p id="voiceProgressText"></p>
+      </div>
+
+      <main>
+        <!-- ============ LOBBY ============ -->
+        <section id="lobby" class="screen">
+          <div class="stage">
+            <div id="avatarWrap" class="avatar-wrap" aria-label="Nhân vật Emma"></div>
+            <div id="fallbackAvatar" class="fallback-avatar" hidden aria-hidden="true">
+              <div class="fb-face"><span class="fb-eye"></span><span class="fb-eye"></span><span class="fb-mouth"></span></div>
+            </div>
+            <p id="greetLine" class="speech-line">…</p>
+            <p id="greetNote" class="hint" hidden>Trình duyệt chưa cho phát tiếng khi chưa có thao tác — chạm vào màn hình một cái là Emma nói ngay.</p>
+            <button id="btnHearGreet" class="btn btn-greet" hidden>🔊 Nghe Emma chào</button>
+          </div>
+
+          <h2>Emma hỏi bạn nè: hôm nay mình luyện chủ đề nào?</h2>
+          <p class="hint">Chọn một chủ đề, rồi trò chuyện với Emma như hai người bạn. Bạn có thể nói bằng mic hoặc gõ chữ đều được.</p>
+          <div id="topicGrid" class="topic-grid"></div>
+
+          <details class="howto">
+            <summary>Cách chơi và cách chấm điểm</summary>
+            <ul>
+              <li>Mỗi chủ đề có 5 lượt trò chuyện. Emma nói câu tiếng Anh, bạn đáp lại bằng tiếng Anh.</li>
+              <li>Trả lời đúng ngay lần 1 được 10 điểm, đúng ở lần 2 được 6 điểm, đọc theo mẫu được 2 điểm.</li>
+              <li>Làm sai, Emma sửa lỗi bằng tiếng Việt: lỗi phát âm, lỗi câu, kèm mẹo làm. Cuối buổi có sao và danh sách câu cần ôn.</li>
+              <li>Nhân vật cáu kỉnh hay nghiêm khắc sẽ dịu dần nếu bạn trả lời đúng và lịch sự liên tiếp — để ý "đồng hồ tâm trạng" nhé.</li>
+              <li>Tiến trình (sao, điểm) lưu trên máy của bạn (localStorage). Lần đầu dùng giọng Piper/Kokoro, app tải model giọng (khoảng 60–80MB) một lần rồi lưu lại, những lần sau không tải nữa.</li>
+            </ul>
+          </details>
+        </section>
+
+        <!-- ============ SESSION ============ -->
+        <section id="session" class="screen" hidden>
+          <button id="btnBack" class="btn btn-link">← Về sảnh chọn chủ đề</button>
+          <div class="session-head">
+            <h2 id="sessionTitle"></h2>
+            <p id="sessionChar"></p>
+            <div class="meter-row">
+              <span>Lượt <b id="turnNo">1</b>/5</span>
+              <span>Điểm buổi này: <b id="sessionScore">0</b></span>
+              <span id="moodWrap" hidden>Tâm trạng: <span id="moodBar" aria-hidden="true"></span> <b id="moodLabel"></b></span>
+            </div>
+            <div class="progress-track"><span id="sessionProgress"></span></div>
+          </div>
+
+          <div class="stage small">
+            <div id="avatarWrap2" class="avatar-wrap" aria-label="Nhân vật Emma"></div>
+            <p id="charLine" class="speech-line"></p>
+            <p id="charLineVi" class="hint"></p>
+            <button id="btnReplay" class="btn">🔊 Nghe lại câu của Emma</button>
+          </div>
+
+          <div class="answer-box">
+            <div class="mic-row">
+              <button id="btnMic" class="btn btn-mic">🎤 Nói bằng mic</button>
+              <span id="micState" class="hint"></span>
+            </div>
+            <label class="sr-only" for="answerInput">Câu trả lời bằng tiếng Anh của bạn</label>
+            <input id="answerInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
+              placeholder="…hoặc gõ câu trả lời tiếng Anh vào đây" />
+            <button id="btnSend" class="btn btn-primary">Trả lời</button>
+          </div>
+
+          <div id="feedback" class="feedback" hidden></div>
+          <button id="btnNext" class="btn btn-primary" hidden>Câu tiếp theo →</button>
+          <button id="btnRepeatModel" class="btn" hidden>🗣️ Đọc theo mẫu (+2 điểm)</button>
+        </section>
+
+        <!-- ============ RESULT ============ -->
+        <section id="result" class="screen" hidden>
+          <h2>Xong buổi luyện rồi!</h2>
+          <p class="big-stars" id="resultStars" aria-label="Số sao đạt được"></p>
+          <p>Điểm buổi này: <b id="resultScore"></b> / 50</p>
+          <p id="resultMood"></p>
+          <h3>Câu cần ôn lại</h3>
+          <ul id="reviewList"></ul>
+          <div class="row">
+            <button id="btnReplayTopic" class="btn btn-primary">Chơi lại chủ đề này</button>
+            <button id="btnResultBack" class="btn">Về sảnh chọn chủ đề</button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="foot">
+        Giọng Piper &amp; Kokoro chạy hoàn toàn trên máy của bạn, không cần tài khoản, không gửi câu chữ lên máy chủ nào.
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
