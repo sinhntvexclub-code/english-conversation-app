@@ -4,13 +4,17 @@
 // its runtime bans ES module scripts. This Vite package USES ES modules, so it
 // can load the real free neural voices client-side, with no API key and no
 // server:
-//   - Piper (via @mintplex-labs/piper-tts-web): main voice for BOTH English
-//     (en_US-lessac-medium) and Vietnamese (vi_VN-vais1000-medium, the best
-//     Piper Vietnamese voice). Models download once (~60MB each) into the
+//   - Piper (via @mintplex-labs/piper-tts-web): main voice for English
+//     (en_US-lessac-medium) and fallback for Vietnamese
+//     (vi_VN-vais1000-medium). Models download once (~60MB each) into the
 //     browser's Origin Private File System and are cached afterwards.
+//   - Microsoft Edge read-aloud (via @edge-tts/universal, browser entry):
+//     FIRST voice for Vietnamese lines only (vi-VN-HoaiMyNeural) — Piper's
+//     Vietnamese voice sounds garbled on real devices, so Vietnamese no
+//     longer defaults to it. Needs network; unofficial endpoint, can break.
 //   - Kokoro-82M (via kokoro-js): higher-quality English option on desktop
 //     (WebGPU + fp32 when available, otherwise WASM + q8). Kokoro has no
-//     Vietnamese voices, so Vietnamese lines fall back to Piper VI.
+//     Vietnamese voices.
 //   - System voices (speechSynthesis): always-available fallback, ranked by
 //     quality (Google / Microsoft Natural / Samantha / HoaiMy …).
 //
@@ -20,6 +24,16 @@
 const PIPER_EN = 'en_US-lessac-medium';
 const PIPER_VI = 'vi_VN-vais1000-medium';
 const KOKORO_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+// Microsoft Edge read-aloud voice for Vietnamese. Piper's Vietnamese voice
+// (vais1000, via espeak-ng phonemes) sounds muffled/garbled on real devices,
+// and many devices have no Vietnamese system voice at all — in both cases the
+// user hears nonsense. HoaiMy is a natural neural Vietnamese voice, free with
+// no key. Trade-off, stated honestly in the UI: Vietnamese lines go through
+// Microsoft's read-aloud service over the network (unofficial endpoint, can
+// break or rate-limit), while English lines stay fully on-device. Edge is
+// tried first for Vietnamese only; Piper VI and the system voice remain as
+// fallbacks, never silently replaced by an English voice.
+const EDGE_VI_VOICE = 'vi-VN-HoaiMyNeural';
 
 let engine = 'piper'; // 'piper' | 'kokoro' | 'system'
 let piperMod = null;
@@ -34,6 +48,8 @@ let currentUtterance = null;
 let speaking = false;
 let piperReady = { en: false, vi: false };
 let piperFailed = null;
+let edgeFailed = null;
+let lastViVoice = null; // 'edge' | 'piper' | 'system' — what actually spoke Vietnamese last
 
 export function setStatusCallback(fn) { statusCb = fn; }
 export function refreshStatus() { reportStatus(); }
@@ -46,22 +62,27 @@ export function setEngine(name) {
 export function getEngine() { return engine; }
 export function isSpeaking() { return speaking; }
 
+function viVoiceLabel() {
+  if (lastViVoice === 'edge') return 'Microsoft HoaiMy (qua mạng)';
+  if (lastViVoice === 'piper') return 'Piper tiếng Việt (dự phòng)';
+  if (lastViVoice === 'system') return 'giọng hệ thống của máy (dự phòng)';
+  return 'Microsoft HoaiMy (qua mạng)';
+}
+
 function reportStatus() {
-  if (engine === 'piper') {
-    if (piperFailed) {
-      statusCb(`Giọng Piper chưa tải được (${piperFailed}) — đang dùng giọng hệ thống dự phòng.`);
-    } else if (piperReady.en && piperReady.vi) {
-      statusCb('Giọng đang dùng: Piper tiếng Anh (Lessac) · Piper tiếng Việt (vais1000). Chạy trên máy bạn, không cần mạng sau lần tải đầu.');
-    } else if (piperReady.en || piperReady.vi) {
-      statusCb('Giọng đang dùng: Piper (một phần đã tải) · phần còn lại dùng giọng hệ thống dự phòng.');
-    } else {
-      statusCb('Giọng đang dùng: Piper — sẽ tải model khi bạn bắt đầu (khoảng 60MB mỗi giọng, chỉ tải một lần).');
-    }
-  } else if (engine === 'kokoro') {
-    statusCb('Giọng đang dùng: Kokoro-82M tiếng Anh (chất lượng cao, máy tính có WebGPU) · câu tiếng Việt dùng Piper tiếng Việt.');
-  } else {
-    statusCb('Giọng đang dùng: giọng hệ thống của máy bạn (dự phòng).');
+  if (engine === 'system') {
+    statusCb('Giọng đang dùng: giọng hệ thống của máy bạn (cả tiếng Anh và tiếng Việt).');
+    return;
   }
+  const enLabel = engine === 'kokoro'
+    ? 'Kokoro-82M tiếng Anh (chất lượng cao, máy tính có WebGPU)'
+    : piperFailed
+      ? 'giọng hệ thống tiếng Anh (Piper chưa tải được)'
+      : 'Piper tiếng Anh (Lessac)';
+  const viNote = edgeFailed
+    ? ` Câu tiếng Việt đang dùng ${viVoiceLabel()} vì giọng Microsoft chưa tải được (${edgeFailed}).`
+    : ` Câu tiếng Việt dùng ${viVoiceLabel()}.`;
+  statusCb(`Giọng đang dùng: ${enLabel}.${viNote}`);
 }
 
 function showProgress(show, text, pct) {
@@ -221,6 +242,19 @@ async function kokoroSpeak(text) {
   return encodeWav(samples, rate);
 }
 
+// ---- Edge-TTS (Microsoft read-aloud, Vietnamese only) ----
+async function edgeSpeak(text) {
+  // Direct module import (see the vite.config alias): the package's
+  // "./browser" barrel is broken at build time, the class module is not.
+  const edgeMod = await import('edge-tts-browser-simple');
+  const tts = new edgeMod.BrowserEdgeTTS(text, EDGE_VI_VOICE);
+  const result = await tts.synthesize();
+  if (!result || !result.audio || result.audio.size === 0) {
+    throw new Error('không nhận được audio từ Microsoft');
+  }
+  return result.audio;
+}
+
 // ---- System voices ----
 function pickSystemVoice(lang) {
   const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
@@ -264,6 +298,23 @@ function systemSpeak(text, lang, { onStart, onEnd } = {}) {
 // ---- Public entry ----
 export async function speak(text, lang, hooks = {}) {
   // lang: 'en' | 'vi'
+  if (lang === 'vi' && engine !== 'system') {
+    // Vietnamese first: Microsoft HoaiMy (natural neural voice). If the
+    // unofficial endpoint is blocked or fails, fall through to Piper VI and
+    // then to the system voice — and say so in the status line.
+    try {
+      const blob = await edgeSpeak(text);
+      lastViVoice = 'edge';
+      edgeFailed = null;
+      reportStatus();
+      await playBlob(blob, hooks);
+      return 'edge';
+    } catch (e) {
+      console.warn('Edge-TTS Vietnamese failed, falling back to Piper VI:', e);
+      edgeFailed = e?.message || 'lỗi mạng';
+      reportStatus();
+    }
+  }
   if (engine === 'kokoro' && lang === 'en') {
     try {
       const blob = await kokoroSpeak(text);
@@ -279,6 +330,8 @@ export async function speak(text, lang, hooks = {}) {
       const voiceId = lang === 'vi' ? PIPER_VI : PIPER_EN;
       const label = lang === 'vi' ? 'giọng Piper tiếng Việt' : 'giọng Piper tiếng Anh';
       const blob = await piperSpeak(text, voiceId, `Đang tải ${label}`);
+      if (lang === 'vi') lastViVoice = 'piper';
+      reportStatus();
       await playBlob(blob, hooks);
       return 'piper';
     } catch (e) {
@@ -286,6 +339,7 @@ export async function speak(text, lang, hooks = {}) {
       reportStatus();
     }
   }
+  if (lang === 'vi') lastViVoice = 'system';
   await systemSpeak(text, lang, hooks);
   return 'system';
 }
